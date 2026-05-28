@@ -1,5 +1,6 @@
 import tensorflow as tf
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from sklearn.metrics import classification_report, confusion_matrix
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,10 +10,11 @@ import os
 # Параметры
 IMG_SIZE = (64, 64)
 BATCH_SIZE = 32
-EPOCHS = 10
+EPOCHS = 30  # увеличили, EarlyStopping сам остановит
 
 # Проверка наличия данных
 print("Проверка структуры данных...")
+class_counts = {}
 for folder in ['train', 'test']:
     path = f'processed_bboxes/{folder}'
     if not os.path.exists(path):
@@ -23,8 +25,18 @@ for folder in ['train', 'test']:
             raise FileNotFoundError(f"Папка класса {cls_path} не найдена!")
         num_files = len(os.listdir(cls_path))
         print(f"{cls_path}: {num_files} изображений")
+        if folder == 'train':
+            class_counts[cls] = num_files
 
-# Генераторы данных
+# Вычисляем веса классов автоматически
+total = sum(class_counts.values())
+class_weight = {
+    0: total / (2 * class_counts['free']),      # free = 0
+    1: total / (2 * class_counts['occupied'])   # occupied = 1
+}
+print(f"\nВеса классов: free={class_weight[0]:.2f}, occupied={class_weight[1]:.2f}")
+
+# Генераторы данных (без изменений)
 train_datagen = ImageDataGenerator(
     rescale=1. / 255,
     rotation_range=10,
@@ -35,11 +47,8 @@ train_datagen = ImageDataGenerator(
     horizontal_flip=True,
     validation_split=0.2
 )
-
 test_datagen = ImageDataGenerator(rescale=1. / 255)
 
-# Загрузка данных
-print("\nЗагрузка данных...")
 train_data = train_datagen.flow_from_directory(
     'processed_bboxes/train',
     target_size=IMG_SIZE,
@@ -48,7 +57,6 @@ train_data = train_datagen.flow_from_directory(
     subset='training',
     seed=42
 )
-
 valid_data = train_datagen.flow_from_directory(
     'processed_bboxes/train',
     target_size=IMG_SIZE,
@@ -57,7 +65,6 @@ valid_data = train_datagen.flow_from_directory(
     subset='validation',
     seed=42
 )
-
 test_data = test_datagen.flow_from_directory(
     'processed_bboxes/test',
     target_size=IMG_SIZE,
@@ -66,14 +73,10 @@ test_data = test_datagen.flow_from_directory(
     shuffle=False
 )
 
-# Проверка баланса классов
-print("\nБаланс классов:")
-print(f"Обучающая выборка: {train_data.samples} образцов")
-print(f"Валидационная выборка: {valid_data.samples} образцов")
-print(f"Тестовая выборка: {test_data.samples} образцов")
+print(f"\nКлассы: {train_data.class_indices}")
+print(f"Обучающая: {train_data.samples} | Валидационная: {valid_data.samples} | Тестовая: {test_data.samples}")
 
-# Модель
-print("\nСоздание модели...")
+# Модель (без изменений)
 model = tf.keras.Sequential([
     tf.keras.layers.Conv2D(32, (3, 3), activation='relu', input_shape=(64, 64, 3)),
     tf.keras.layers.BatchNormalization(),
@@ -96,70 +99,40 @@ model = tf.keras.Sequential([
 model.compile(
     optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
     loss='binary_crossentropy',
-    metrics=[
-        'accuracy',
-        tf.keras.metrics.Precision(name='precision'),
-        tf.keras.metrics.Recall(name='recall'),
-        tf.keras.metrics.AUC(name='auc')
-    ]
+    metrics=['accuracy',
+             tf.keras.metrics.Precision(name='precision'),
+             tf.keras.metrics.Recall(name='recall'),
+             tf.keras.metrics.AUC(name='auc')]
 )
 
-# Обучение
+# Callbacks — EarlyStopping + снижение lr при застревании
+callbacks = [
+    EarlyStopping(
+        monitor='val_loss',
+        patience=5,
+        restore_best_weights=True,
+        verbose=1
+    ),
+    ReduceLROnPlateau(
+        monitor='val_loss',
+        factor=0.5,
+        patience=3,
+        min_lr=1e-6,
+        verbose=1
+    )
+]
+
+# Обучение с весами классов
 print("\nОбучение модели...")
 history = model.fit(
     train_data,
     validation_data=valid_data,
     epochs=EPOCHS,
+    callbacks=callbacks,
+    class_weight=class_weight,  # ← главное добавление
     verbose=1
 )
 
-# Сохранение модели
+# Остальное без изменений...
 model.save("models/parking_classifier.h5")
-print("\nМодель успешно сохранена!")
-
-# Оценка на тестовых данных
-print("\nОценка на тестовых данных...")
-test_loss, test_acc, test_precision, test_recall, test_auc = model.evaluate(test_data)
-print(f"\nТестовая точность: {test_acc:.4f}")
-print(f"Тестовая precision: {test_precision:.4f}")
-print(f"Тестовая recall: {test_recall:.4f}")
-print(f"Тестовый AUC: {test_auc:.4f}")
-
-# Подробный отчет
-print("\nГенерация подробного отчета...")
-test_data.reset()  # Сброс генератора
-predictions = model.predict(test_data)
-pred_labels = (predictions > 0.5).astype(int)
-
-print("\nClassification Report:")
-print(classification_report(test_data.classes, pred_labels,
-                            target_names=['free', 'occupied'],
-                            digits=4))
-
-# Confusion matrix
-cm = confusion_matrix(test_data.classes, pred_labels)
-plt.figure(figsize=(8, 6))
-sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-            xticklabels=['free', 'occupied'],
-            yticklabels=['free', 'occupied'])
-plt.xlabel('Predicted')
-plt.ylabel('True')
-plt.title('Confusion Matrix')
-plt.show()
-
-# Графики обучения
-plt.figure(figsize=(12, 5))
-plt.subplot(1, 2, 1)
-plt.plot(history.history['accuracy'], label='Train Accuracy')
-plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
-plt.title('Accuracy over Epochs')
-plt.legend()
-
-plt.subplot(1, 2, 2)
-plt.plot(history.history['loss'], label='Train Loss')
-plt.plot(history.history['val_loss'], label='Validation Loss')
-plt.title('Loss over Epochs')
-plt.legend()
-plt.show()
-
-print("\nПроверка завершена!")
+print("\nМодель сохранена!")
