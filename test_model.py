@@ -5,18 +5,11 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import cv2
 import tensorflow as tf
-import sys
-from pathlib import Path
 import warnings
 
 
 # Подавляем специфические предупреждения TensorFlow
 warnings.filterwarnings("ignore", category=UserWarning, module='absl')
-
-# Добавляем путь к текущей директории для импорта predict.py
-# sys.path.append(str(Path(__file__).parent))
-# from predict import preprocess_spot, safe_predict
-
 
 def load_model_with_metrics(model_path):
     """Загрузка модели с инициализацией метрик"""

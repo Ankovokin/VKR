@@ -1,0 +1,5 @@
+processed_bboxes/
+.venv/
+__pycache__/
+*.pyc
+parking.db
