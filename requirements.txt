@@ -1,0 +1,12 @@
+# Зависимости для запуска приложения
+Flask
+opencv-python
+numpy
+tensorflow
+
+# Дополнительно — для обучения и тестирования модели
+# (train_model.py, test_model.py)
+scikit-learn
+matplotlib
+seaborn
+tqdm
